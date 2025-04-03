@@ -1,20 +1,15 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 pragma solidity ^0.8.25;
 
-import { ERC7579ValidatorBase } from "modulekit/Modules.sol";
-import { PackedUserOperation } from "modulekit/external/ERC4337.sol";
-import { SignatureCheckerLib } from "solady/utils/SignatureCheckerLib.sol";
-import { SentinelList4337Lib, SENTINEL } from "sentinellist/SentinelList4337.sol";
-import { LibSort } from "solady/utils/LibSort.sol";
-import { CheckSignatures } from "checknsignatures/CheckNSignatures.sol";
-import { ECDSA } from "solady/utils/ECDSA.sol";
+import {ERC7579ValidatorBase} from "modulekit/Modules.sol";
+import {PackedUserOperation} from "modulekit/external/ERC4337.sol";
+import {SignatureCheckerLib} from "solady/utils/SignatureCheckerLib.sol";
+// import {SentinelList4337Lib, SENTINEL} from "sentinellist/SentinelList4337.sol";
+import {SentinelList4337Lib, SENTINEL, WebAuthnValidatorData} from "./SentinelList4337New.sol";
+import {LibSort} from "solady/utils/LibSort.sol";
+import {CheckSignatures} from "checknsignatures/CheckNSignatures.sol";
+import {ECDSA} from "solady/utils/ECDSA.sol";
 import {WebAuthn} from "./WebAuthn.sol";
-
-struct WebAuthnValidatorData {
-    uint256 pubKeyX;
-    uint256 pubKeyY;
-}
-
 
 uint256 constant TYPE_STATELESS_VALIDATOR = 7;
 /**
@@ -37,18 +32,25 @@ contract WebAuthnOwnableValidator is ERC7579ValidatorBase {
     event ThresholdSet(address indexed account, uint256 threshold);
     event OwnerAdded(address indexed account, address owner);
     event OwnerRemoved(address indexed account, address owner);
+    // Emitted when the public key of an account is changed.
+    event WebAuthnPublicKeyRegistered(
+        address indexed account, bytes32 indexed authenticatorIdHash, uint256 pubKeyX, uint256 pubKeyY
+    );
+    event WebAuthnPublicKeyRemoved(address indexed account, bytes32 indexed authenticatorIdHash);
 
     error ThresholdNotSet();
     error InvalidThreshold();
     error NotSortedAndUnique();
     error MaxOwnersReached();
     error InvalidOwner(address owner);
+    error InvalidAuthenticatorIdHash(bytes32 authenticatorIdHash);
     error CannotRemoveOwner();
+    error InvalidPublicKey();
 
     // maximum number of owners per account
     uint256 constant MAX_OWNERS = 32;
 
-    // account => owners
+    // account => authenticatorIdHash (=> WebAuthnValidatorData)
     SentinelList4337Lib.SentinelList owners;
     // account => threshold
     mapping(address account => uint256) public threshold;
@@ -60,20 +62,39 @@ contract WebAuthnOwnableValidator is ERC7579ValidatorBase {
     //////////////////////////////////////////////////////////////////////////*/
 
     /**
-     * Initializes the module with the threshold and owners
-     * @dev data is encoded as follows: abi.encode(threshold, owners)
+     * Initializes the module with the threshold and WebAuthnValidatorData
+     * @dev data is encoded as follows: abi.encode(threshold, WebAuthnValidatorData)
      *
-     * @param data encoded data containing the threshold and owners
+     * @param data encoded data containing the threshold and WebAuthnValidatorData
      */
     function onInstall(bytes calldata data) external override {
         // Check if the module is already initialized?
         require(!isInitialized(msg.sender), "Module already initialized");
 
-        // decode the threshold and owners
-        (uint256 _threshold, address[] memory _owners) = abi.decode(data, (uint256, address[]));
+        // Decode the threshold, WebAuthnValidatorData array, and authenticatorIdHashes
+        (
+            uint256 _threshold,
+            WebAuthnValidatorData[] memory webAuthnDataArray,
+            bytes32[] memory authenticatorIdHashes
+        ) = abi.decode(data, (uint256, WebAuthnValidatorData[], bytes32[]));
 
+        // Ensure the arrays are of the same length
+        require(
+            webAuthnDataArray.length == authenticatorIdHashes.length,
+            "Mismatched data lengths"
+        );
+
+        // Check validity of each public key
+        for (uint256 i = 0; i < webAuthnDataArray.length; i++) {
+            WebAuthnValidatorData memory webAuthnData = webAuthnDataArray[i];
+            if (webAuthnData.pubKeyX == 0 || webAuthnData.pubKeyY == 0) {
+                revert InvalidPublicKey();
+            }
+        }
+
+        // TODO check that the authenticatorIdHashes are unique
         // check that owners are sorted and uniquified
-        if (!_owners.isSortedAndUniquified()) {
+        if (!authenticatorIdHashes.isSortedAndUniquified()) {
             revert NotSortedAndUnique();
         }
 
@@ -82,9 +103,9 @@ contract WebAuthnOwnableValidator is ERC7579ValidatorBase {
             revert ThresholdNotSet();
         }
 
-        // make sure the threshold is less than the number of owners
-        uint256 ownersLength = _owners.length;
-        if (ownersLength < _threshold) {
+        // make sure the threshold is less than the number of authenticatorIdHashes
+        uint256 authenticatorIdHashesLength = authenticatorIdHashes.length;
+        if (authenticatorIdHashesLength < _threshold) {
             revert InvalidThreshold();
         }
 
@@ -95,23 +116,29 @@ contract WebAuthnOwnableValidator is ERC7579ValidatorBase {
         threshold[account] = _threshold;
 
         // check if max owners is reached
-        if (ownersLength > MAX_OWNERS) {
+        if (authenticatorIdHashesLength > MAX_OWNERS) {
             revert MaxOwnersReached();
         }
 
         // set owner count
-        ownerCount[account] = ownersLength;
+        ownerCount[account] = authenticatorIdHashesLength;
 
         // initialize the owner list
         owners.init(account);
 
         // add owners to the list
-        for (uint256 i = 0; i < ownersLength; i++) {
-            address _owner = _owners[i];
-            if (_owner == address(0)) {
-                revert InvalidOwner(_owner);
+        for (uint256 i = 0; i < authenticatorIdHashesLength; i++) {
+            bytes32 authenticatorIdHash = authenticatorIdHashes[i];
+            if (authenticatorIdHash == bytes32(0)) {
+                revert InvalidAuthenticatorIdHash(authenticatorIdHash);
             }
-            owners.push(account, _owner);
+            owners.push(account, authenticatorIdHash, webAuthnDataArray[i]);
+            emit WebAuthnPublicKeyRegistered(
+                account,
+                authenticatorIdHash,
+                webAuthnDataArray[i].pubKeyX,
+                webAuthnDataArray[i].pubKeyY
+            );
         }
 
         emit ModuleInitialized(account);
@@ -179,31 +206,36 @@ contract WebAuthnOwnableValidator is ERC7579ValidatorBase {
      * Adds an owner to the account
      * @dev will revert if the owner is already added
      *
-     * @param owner address of the owner to add
+     * @param _data authenticatorIdHash and public key encoded as `abi.encode(authenticatorIdHash, WebAuthnValidatorData)`
      */
-    function addOwner(address owner) external {
+    function addOwner(bytes calldata _data) external {
         // cache the account address
         address account = msg.sender;
         // check if the module is initialized and revert if it is not
         if (!isInitialized(account)) revert NotInitialized(account);
 
-        // revert if the owner is address(0)
-        if (owner == address(0)) {
-            revert InvalidOwner(owner);
+        // check validity of the public key
+        (WebAuthnValidatorData memory webAuthnData, bytes32 authenticatorIdHash) =
+            abi.decode(_data, (WebAuthnValidatorData, bytes32));
+        if (webAuthnData.pubKeyX == 0 || webAuthnData.pubKeyY == 0) {
+            revert InvalidPublicKey();
         }
 
+        // cache owner count
+        uint256 count = ownerCount[account];
+
         // check if max owners is reached
-        if (ownerCount[account] >= MAX_OWNERS) {
+        if (count >= MAX_OWNERS) {
             revert MaxOwnersReached();
         }
 
         // increment the owner count
         ownerCount[account]++;
 
-        // add the owner to the linked list
-        owners.push(account, owner);
+        // add the owner to the list
+        owners.push(account, authenticatorIdHash, webAuthnData);
 
-        emit OwnerAdded(account, owner);
+        emit WebAuthnPublicKeyRegistered(msg.sender, authenticatorIdHash, webAuthnData.pubKeyX, webAuthnData.pubKeyY);
     }
 
     /**
@@ -213,7 +245,7 @@ contract WebAuthnOwnableValidator is ERC7579ValidatorBase {
      * @param prevOwner address of the previous owner
      * @param owner address of the owner to remove
      */
-    function removeOwner(address prevOwner, address owner) external {
+    function removeOwner(bytes32 prevOwner, bytes32 owner) external {
         // cache the account address
         address account = msg.sender;
 
@@ -230,7 +262,7 @@ contract WebAuthnOwnableValidator is ERC7579ValidatorBase {
         // decrement the owner count
         ownerCount[account]--;
 
-        emit OwnerRemoved(account, owner);
+        emit WebAuthnPublicKeyRemoved(account, owner);
     }
 
     /**
@@ -240,9 +272,15 @@ contract WebAuthnOwnableValidator is ERC7579ValidatorBase {
      *
      * @return ownersArray array of owners
      */
-    function getOwners(address account) external view returns (address[] memory ownersArray) {
+    function getOwners(
+        address account
+    ) external view returns (bytes32[] memory ownersArray) {
         // get the owners from the linked list
-        (ownersArray,) = owners.getEntriesPaginated(account, SENTINEL, MAX_OWNERS);
+        (ownersArray, ) = owners.getEntriesPaginated(
+            account,
+            SENTINEL,
+            MAX_OWNERS
+        );
     }
 
     /*//////////////////////////////////////////////////////////////////////////
@@ -260,14 +298,13 @@ contract WebAuthnOwnableValidator is ERC7579ValidatorBase {
     function validateUserOp(
         PackedUserOperation calldata userOp,
         bytes32 userOpHash
-    )
-        external
-        view
-        override
-        returns (ValidationData)
-    {
+    ) external view override returns (ValidationData) {
         // validate the signature with the config
-        bool isValid = _validateSignatureWithConfig(userOp.sender, userOpHash, userOp.signature);
+        bool isValid = _validateSignatureWithConfig(
+            userOp.sender,
+            userOpHash,
+            userOp.signature
+        );
 
         // return the result
         if (isValid) {
@@ -288,12 +325,7 @@ contract WebAuthnOwnableValidator is ERC7579ValidatorBase {
         address,
         bytes32 hash,
         bytes calldata data
-    )
-        external
-        view
-        override
-        returns (bytes4)
-    {
+    ) external view override returns (bytes4) {
         // validate the signature with the config
         bool isValid = _validateSignatureWithConfig(msg.sender, hash, data);
 
@@ -317,13 +349,12 @@ contract WebAuthnOwnableValidator is ERC7579ValidatorBase {
         bytes32 hash,
         bytes calldata signature,
         bytes calldata data
-    )
-        external
-        view
-        returns (bool)
-    {
+    ) external view returns (bool) {
         // decode the threshold and owners
-        (uint256 _threshold, address[] memory _owners) = abi.decode(data, (uint256, address[]));
+        (uint256 _threshold, address[] memory _owners) = abi.decode(
+            data,
+            (uint256, address[])
+        );
 
         // check that owners are sorted and uniquified
         if (!_owners.isSortedAndUniquified()) {
@@ -337,7 +368,9 @@ contract WebAuthnOwnableValidator is ERC7579ValidatorBase {
 
         // recover the signers from the signatures
         address[] memory signers = CheckSignatures.recoverNSignatures(
-            ECDSA.toEthSignedMessageHash(hash), signature, _threshold
+            ECDSA.toEthSignedMessageHash(hash),
+            signature,
+            _threshold
         );
 
         // sort and uniquify the signers to make sure a signer is not reused
@@ -348,7 +381,7 @@ contract WebAuthnOwnableValidator is ERC7579ValidatorBase {
         uint256 validSigners;
         uint256 signersLength = signers.length;
         for (uint256 i = 0; i < signersLength; i++) {
-            (bool found,) = _owners.searchSorted(signers[i]);
+            (bool found, ) = _owners.searchSorted(signers[i]);
             if (found) {
                 validSigners++;
             }
@@ -371,11 +404,7 @@ contract WebAuthnOwnableValidator is ERC7579ValidatorBase {
         address account,
         bytes32 hash,
         bytes calldata data
-    )
-        internal
-        view
-        returns (bool)
-    {
+    ) internal view returns (bool) {
         // get the threshold and check that its set
         uint256 _threshold = threshold[account];
         if (_threshold == 0) {
@@ -383,8 +412,11 @@ contract WebAuthnOwnableValidator is ERC7579ValidatorBase {
         }
 
         // recover the signers from the signatures
-        address[] memory signers =
-            CheckSignatures.recoverNSignatures(ECDSA.toEthSignedMessageHash(hash), data, _threshold);
+        address[] memory signers = CheckSignatures.recoverNSignatures(
+            ECDSA.toEthSignedMessageHash(hash),
+            data,
+            _threshold
+        );
 
         // sort and uniquify the signers to make sure a signer is not reused
         signers.sort();
@@ -419,7 +451,9 @@ contract WebAuthnOwnableValidator is ERC7579ValidatorBase {
      *
      * @return true if the type is a module type, false otherwise
      */
-    function isModuleType(uint256 typeID) external pure override returns (bool) {
+    function isModuleType(
+        uint256 typeID
+    ) external pure override returns (bool) {
         return typeID == TYPE_VALIDATOR || typeID == TYPE_STATELESS_VALIDATOR;
     }
 

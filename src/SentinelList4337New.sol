@@ -8,7 +8,6 @@ bytes32 constant ZERO_HASH = bytes32(0x0);
 struct WebAuthnValidatorData {
     uint256 pubKeyX;
     uint256 pubKeyY;
-    bytes32 authenticatorIdHash; // usefull???
 }
 
 /**
@@ -81,28 +80,28 @@ library SentinelList4337Lib {
      *
      * @param self The linked list
      * @param account The account to push the new entry for
-     * @param newEntry The new entry
+     * @param newEntry The bytes representation of the new entry
+     * @param dataEntry The data to store for the new entry
      */
     function push(
         SentinelList storage self,
         address account,
-        WebAuthnValidatorData memory newEntry
+        bytes32 newEntry,
+        WebAuthnValidatorData memory dataEntry
     ) internal {
-        bytes32 entryKey = newEntry.authenticatorIdHash;
-
-        if (entryKey == ZERO_HASH || entryKey == SENTINEL) {
-            revert LinkedList_InvalidEntry(entryKey);
+        if (newEntry == ZERO_HASH || newEntry == SENTINEL) {
+            revert LinkedList_InvalidEntry(newEntry);
         }
-        if (self.entries[entryKey][account] != ZERO_HASH) {
-            revert LinkedList_EntryAlreadyInList(entryKey);
+        if (self.entries[newEntry][account] != ZERO_HASH) {
+            revert LinkedList_EntryAlreadyInList(newEntry);
         }
 
         // Link the new entry into the list
-        self.entries[entryKey][account] = self.entries[SENTINEL][account];
-        self.entries[SENTINEL][account] = entryKey;
+        self.entries[newEntry][account] = self.entries[SENTINEL][account];
+        self.entries[SENTINEL][account] = newEntry;
 
         // Store the data for the new entry
-        self.data[entryKey] = newEntry;
+        self.data[newEntry] = dataEntry;
     }
 
     /**
@@ -113,16 +112,16 @@ library SentinelList4337Lib {
      * @param account The account to push the new entry for
      * @param newEntry The new entry
      */
-    function safePush(
-        SentinelList storage self,
-        address account,
-        WebAuthnValidatorData memory newEntry
-    ) internal {
-        if (!alreadyInitialized(self, account)) {
-            init({self: self, account: account});
-        }
-        push({self: self, account: account, newEntry: newEntry});
-    }
+    // function safePush(
+    //     SentinelList storage self,
+    //     address account,
+    //     WebAuthnValidatorData memory newEntry
+    // ) internal {
+    //     if (!alreadyInitialized(self, account)) {
+    //         init({self: self, account: account});
+    //     }
+    //     push({self: self, account: account, newEntry: newEntry});
+    // }
 
     /**
      * Pop an entry from the linked list
@@ -192,14 +191,14 @@ library SentinelList4337Lib {
     }
 
     /**
-     * Get all entries in the linked list
+     * Get all entries in the linked list as an array of bytes32 keys
      *
      * @param self The linked list
      * @param account The account to get the entries for
      * @param start The start entry
      * @param pageSize The page size
      *
-     * @return array All entries in the linked list
+     * @return array All entry keys in the linked list
      * @return next The next entry
      */
     function getEntriesPaginated(
@@ -207,25 +206,21 @@ library SentinelList4337Lib {
         address account,
         bytes32 start,
         uint256 pageSize
-    )
-        internal
-        view
-        returns (WebAuthnValidatorData[] memory array, bytes32 next)
-    {
+    ) internal view returns (bytes32[] memory array, bytes32 next) {
         if (start != SENTINEL && !contains(self, account, start)) {
             revert LinkedList_InvalidEntry(start);
         }
         if (pageSize == 0) revert LinkedList_InvalidPage();
 
         // Init array with max page size
-        array = new WebAuthnValidatorData[](pageSize);
+        array = new bytes32[](pageSize);
 
         // Populate return array
         uint256 entryCount = 0;
         next = self.entries[start][account];
         while (next != ZERO_HASH && next != SENTINEL && entryCount < pageSize) {
-            array[entryCount] = self.data[next];
-            next = self.entries[next][account];
+            array[entryCount] = next; // Collect the bytes32 key
+            next = self.entries[next][account]; // Move to the next entry
             entryCount++;
         }
 
