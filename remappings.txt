@@ -2,12 +2,14 @@
 sentinellist/=node_modules/@rhinestone/sentinellist/src/
 erc4337-validation/=node_modules/@rhinestone/erc4337-validation/src/
 modulekit/=node_modules/@rhinestone/modulekit/src/
+checknsignatures/=node_modules/@rhinestone/checknsignatures/src/
 
 @ERC4337/=node_modules/@ERC4337/
 account-abstraction/=node_modules/@ERC4337/account-abstraction/contracts/
 account-abstraction-v0.6/=node_modules/@ERC4337/account-abstraction-v0.6/contracts/
 
 @openzeppelin/=node_modules/@openzeppelin/
+@openzeppelin/contracts/=node_modules/@openzeppelin/contracts/
 ds-test/=node_modules/ds-test/src/
 forge-std/=node_modules/forge-std/src/
 solady/=node_modules/solady/src/
