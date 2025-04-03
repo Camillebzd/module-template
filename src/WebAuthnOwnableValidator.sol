@@ -4,7 +4,6 @@ pragma solidity ^0.8.25;
 import {ERC7579ValidatorBase} from "modulekit/Modules.sol";
 import {PackedUserOperation} from "modulekit/external/ERC4337.sol";
 import {SignatureCheckerLib} from "solady/utils/SignatureCheckerLib.sol";
-// import {SentinelList4337Lib, SENTINEL} from "sentinellist/SentinelList4337.sol";
 import {SentinelList4337Lib, SENTINEL, WebAuthnValidatorData} from "./SentinelList4337New.sol";
 import {LibSort} from "solady/utils/LibSort.sol";
 import {CheckSignatures} from "checknsignatures/CheckNSignatures.sol";
@@ -30,13 +29,16 @@ contract WebAuthnOwnableValidator is ERC7579ValidatorBase {
     event ModuleInitialized(address indexed account);
     event ModuleUninitialized(address indexed account);
     event ThresholdSet(address indexed account, uint256 threshold);
-    event OwnerAdded(address indexed account, address owner);
-    event OwnerRemoved(address indexed account, address owner);
-    // Emitted when the public key of an account is changed.
     event WebAuthnPublicKeyRegistered(
-        address indexed account, bytes32 indexed authenticatorIdHash, uint256 pubKeyX, uint256 pubKeyY
+        address indexed account,
+        bytes32 indexed authenticatorIdHash,
+        uint256 pubKeyX,
+        uint256 pubKeyY
     );
-    event WebAuthnPublicKeyRemoved(address indexed account, bytes32 indexed authenticatorIdHash);
+    event WebAuthnPublicKeyRemoved(
+        address indexed account,
+        bytes32 indexed authenticatorIdHash
+    );
 
     error ThresholdNotSet();
     error InvalidThreshold();
@@ -215,8 +217,10 @@ contract WebAuthnOwnableValidator is ERC7579ValidatorBase {
         if (!isInitialized(account)) revert NotInitialized(account);
 
         // check validity of the public key
-        (WebAuthnValidatorData memory webAuthnData, bytes32 authenticatorIdHash) =
-            abi.decode(_data, (WebAuthnValidatorData, bytes32));
+        (
+            WebAuthnValidatorData memory webAuthnData,
+            bytes32 authenticatorIdHash
+        ) = abi.decode(_data, (WebAuthnValidatorData, bytes32));
         if (webAuthnData.pubKeyX == 0 || webAuthnData.pubKeyY == 0) {
             revert InvalidPublicKey();
         }
@@ -235,7 +239,12 @@ contract WebAuthnOwnableValidator is ERC7579ValidatorBase {
         // add the owner to the list
         owners.push(account, authenticatorIdHash, webAuthnData);
 
-        emit WebAuthnPublicKeyRegistered(msg.sender, authenticatorIdHash, webAuthnData.pubKeyX, webAuthnData.pubKeyY);
+        emit WebAuthnPublicKeyRegistered(
+            msg.sender,
+            authenticatorIdHash,
+            webAuthnData.pubKeyX,
+            webAuthnData.pubKeyY
+        );
     }
 
     /**
@@ -282,6 +291,8 @@ contract WebAuthnOwnableValidator is ERC7579ValidatorBase {
             MAX_OWNERS
         );
     }
+
+    // TODO Create a function to retrieve the public key of an owner
 
     /*//////////////////////////////////////////////////////////////////////////
                                      MODULE LOGIC
@@ -351,48 +362,48 @@ contract WebAuthnOwnableValidator is ERC7579ValidatorBase {
         bytes calldata data
     ) external view returns (bool) {
         // decode the threshold and owners
-        (uint256 _threshold, address[] memory _owners) = abi.decode(
-            data,
-            (uint256, address[])
-        );
+        // (uint256 _threshold, address[] memory _owners) = abi.decode(
+        //     data,
+        //     (uint256, address[])
+        // );
 
-        // check that owners are sorted and uniquified
-        if (!_owners.isSortedAndUniquified()) {
-            return false;
-        }
+        // // check that owners are sorted and uniquified
+        // if (!_owners.isSortedAndUniquified()) {
+        //     return false;
+        // }
 
-        // check that threshold is set
-        if (_threshold == 0) {
-            return false;
-        }
+        // // check that threshold is set
+        // if (_threshold == 0) {
+        //     return false;
+        // }
 
-        // recover the signers from the signatures
-        address[] memory signers = CheckSignatures.recoverNSignatures(
-            ECDSA.toEthSignedMessageHash(hash),
-            signature,
-            _threshold
-        );
+        // // recover the signers from the signatures
+        // address[] memory signers = CheckSignatures.recoverNSignatures(
+        //     ECDSA.toEthSignedMessageHash(hash),
+        //     signature,
+        //     _threshold
+        // );
 
-        // sort and uniquify the signers to make sure a signer is not reused
-        signers.sort();
-        signers.uniquifySorted();
+        // // sort and uniquify the signers to make sure a signer is not reused
+        // signers.sort();
+        // signers.uniquifySorted();
 
-        // check if the signers are owners
-        uint256 validSigners;
-        uint256 signersLength = signers.length;
-        for (uint256 i = 0; i < signersLength; i++) {
-            (bool found, ) = _owners.searchSorted(signers[i]);
-            if (found) {
-                validSigners++;
-            }
-        }
+        // // check if the signers are owners
+        // uint256 validSigners;
+        // uint256 signersLength = signers.length;
+        // for (uint256 i = 0; i < signersLength; i++) {
+        //     (bool found, ) = _owners.searchSorted(signers[i]);
+        //     if (found) {
+        //         validSigners++;
+        //     }
+        // }
 
-        // check if the threshold is met and return the result
-        if (validSigners >= _threshold) {
-            // if the threshold is met, return true
-            return true;
-        }
-        // if the threshold is not met, false
+        // // check if the threshold is met and return the result
+        // if (validSigners >= _threshold) {
+        //     // if the threshold is met, return true
+        //     return true;
+        // }
+        // // if the threshold is not met, false
         return false;
     }
 
@@ -406,37 +417,37 @@ contract WebAuthnOwnableValidator is ERC7579ValidatorBase {
         bytes calldata data
     ) internal view returns (bool) {
         // get the threshold and check that its set
-        uint256 _threshold = threshold[account];
-        if (_threshold == 0) {
-            return false;
-        }
+        // uint256 _threshold = threshold[account];
+        // if (_threshold == 0) {
+        //     return false;
+        // }
 
-        // recover the signers from the signatures
-        address[] memory signers = CheckSignatures.recoverNSignatures(
-            ECDSA.toEthSignedMessageHash(hash),
-            data,
-            _threshold
-        );
+        // // recover the signers from the signatures
+        // address[] memory signers = CheckSignatures.recoverNSignatures(
+        //     ECDSA.toEthSignedMessageHash(hash),
+        //     data,
+        //     _threshold
+        // );
 
-        // sort and uniquify the signers to make sure a signer is not reused
-        signers.sort();
-        signers.uniquifySorted();
+        // // sort and uniquify the signers to make sure a signer is not reused
+        // signers.sort();
+        // signers.uniquifySorted();
 
-        // check if the signers are owners
-        uint256 validSigners;
-        uint256 signersLength = signers.length;
-        for (uint256 i = 0; i < signersLength; i++) {
-            if (owners.contains(account, signers[i])) {
-                validSigners++;
-            }
-        }
+        // // check if the signers are owners
+        // uint256 validSigners;
+        // uint256 signersLength = signers.length;
+        // for (uint256 i = 0; i < signersLength; i++) {
+        //     if (owners.contains(account, signers[i])) {
+        //         validSigners++;
+        //     }
+        // }
 
-        // check if the threshold is met and return the result
-        if (validSigners >= _threshold) {
-            // if the threshold is met, return true
-            return true;
-        }
-        // if the threshold is not met, return false
+        // // check if the threshold is met and return the result
+        // if (validSigners >= _threshold) {
+        //     // if the threshold is met, return true
+        //     return true;
+        // }
+        // // if the threshold is not met, return false
         return false;
     }
 
